@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Othello</title>
+  <title>Othello2</title>
   <style>
     :root {
       --felt: #1f7a45;
@@ -140,11 +140,427 @@
 </head>
 <body>
   <div class="wrap">
-    <h1>Othello</h1>
+    <h1>Othello2 by Matthew</h1>
     <div class="subtitle">You are Black · computer is White</div>
     <div class="panel">
       <div class="score">
         <span class="chip"><span class="mini b"></span> Black <strong id="bs">2</strong></span>
         <span class="chip"><span class="mini w"></span> White <strong id="ws">2</strong></span>
       </div>
-      <div
+      <div id="status">Black to move</div>
+    </div>
+    <div class="board-frame"><div id="board"></div></div>
+    <div class="controls">
+      <select id="level">
+        <option value="easy">Level: Easy</option>
+        <option value="medium" selected>Level: Medium</option>
+        <option value="hard">Level: Hard</option>
+      </select>
+      <button type="button" id="undo">Undo</button>
+      <button type="button" id="share" disabled>Share</button>
+      <button type="button" id="restart">Restart</button>
+    </div>
+    <div id="msg">Click a ringed square to place a disc.</div>
+  </div>
+
+  <script>
+    (function () {
+      var N = 8;
+      var DIRS = [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]];
+      var BLACK = 1, WHITE = 2;
+      var WEIGHTS = [
+        [120,-20, 20,  5,  5, 20,-20,120],
+        [-20,-40, -5, -5, -5, -5,-40,-20],
+        [ 20, -5, 15,  3,  3, 15, -5, 20],
+        [  5, -5,  3,  3,  3,  3, -5,  5],
+        [  5, -5,  3,  3,  3,  3, -5,  5],
+        [ 20, -5, 15,  3,  3, 15, -5, 20],
+        [-20,-40, -5, -5, -5, -5,-40,-20],
+        [120,-20, 20,  5,  5, 20,-20,120]
+      ];
+
+      var board, prevBoard, current, gameOver, cells, history;
+
+      var elBoard = document.getElementById("board");
+      var elBS = document.getElementById("bs");
+      var elWS = document.getElementById("ws");
+      var elStatus = document.getElementById("status");
+      var elMsg = document.getElementById("msg");
+      var elUndo = document.getElementById("undo");
+      var elShare = document.getElementById("share");
+      var elLevel = document.getElementById("level");
+
+      function emptyBoard() {
+        var b = [];
+        for (var r = 0; r < N; r++) {
+          b[r] = [];
+          for (var c = 0; c < N; c++) b[r][c] = 0;
+        }
+        b[3][3] = WHITE; b[3][4] = BLACK;
+        b[4][3] = BLACK; b[4][4] = WHITE;
+        return b;
+      }
+
+      function copyBoard(b) {
+        var n = [];
+        for (var r = 0; r < N; r++) n[r] = b[r].slice();
+        return n;
+      }
+
+      function inb(r, c) { return r >= 0 && r < N && c >= 0 && c < N; }
+
+      function colorName(v) { return v === BLACK ? "black" : "white"; }
+
+      function flipsAt(b, r, c, p) {
+        if (b[r][c] !== 0) return [];
+        var opp = 3 - p, flips = [];
+        for (var i = 0; i < 8; i++) {
+          var dr = DIRS[i][0], dc = DIRS[i][1];
+          var nr = r + dr, nc = c + dc, line = [];
+          while (inb(nr, nc) && b[nr][nc] === opp) {
+            line.push([nr, nc]);
+            nr += dr; nc += dc;
+          }
+          if (line.length && inb(nr, nc) && b[nr][nc] === p) {
+            for (var k = 0; k < line.length; k++) flips.push(line[k]);
+          }
+        }
+        return flips;
+      }
+
+      function legalMoves(b, p) {
+        var moves = [];
+        for (var r = 0; r < N; r++) {
+          for (var c = 0; c < N; c++) {
+            var f = flipsAt(b, r, c, p);
+            if (f.length) moves.push({ r: r, c: c, flips: f });
+          }
+        }
+        return moves;
+      }
+
+      function applyMove(b, r, c, p, flips) {
+        var next = copyBoard(b);
+        next[r][c] = p;
+        for (var i = 0; i < flips.length; i++) next[flips[i][0]][flips[i][1]] = p;
+        return next;
+      }
+
+      function counts(b) {
+        var black = 0, white = 0;
+        for (var r = 0; r < N; r++) {
+          for (var c = 0; c < N; c++) {
+            if (b[r][c] === BLACK) black++;
+            else if (b[r][c] === WHITE) white++;
+          }
+        }
+        return { black: black, white: white };
+      }
+
+      function snapshot() {
+        history.push({
+          board: copyBoard(board),
+          current: current,
+          gameOver: gameOver,
+          msg: elMsg.innerHTML
+        });
+        elUndo.disabled = history.length === 0;
+      }
+
+      function evaluate(b, p) {
+        var score = 0, mine = 0, opp = 0;
+        for (var r = 0; r < N; r++) {
+          for (var c = 0; c < N; c++) {
+            if (b[r][c] === p) { score += WEIGHTS[r][c]; mine++; }
+            else if (b[r][c] === 3 - p) { score -= WEIGHTS[r][c]; opp++; }
+          }
+        }
+        score += (legalMoves(b, p).length - legalMoves(b, 3 - p).length) * 8;
+        score += (mine - opp) * 2;
+        return score;
+      }
+
+      function pickEasy(moves) {
+        return moves[Math.floor(Math.random() * moves.length)];
+      }
+
+      function pickMedium(moves) {
+        moves = moves.slice().sort(function (a, b) {
+          var ac = WEIGHTS[a.r][a.c], bc = WEIGHTS[b.r][b.c];
+          if (ac !== bc) return bc - ac;
+          return b.flips.length - a.flips.length;
+        });
+        return moves[0];
+      }
+
+      function pickHard(b, moves, p) {
+        var best = moves[0], bestScore = -99999;
+        for (var i = 0; i < moves.length; i++) {
+          var m = moves[i];
+          var next = applyMove(b, m.r, m.c, p, m.flips);
+          var reply = legalMoves(next, 3 - p);
+          var worst = 99999;
+          if (!reply.length) {
+            worst = evaluate(next, p);
+          } else {
+            for (var j = 0; j < reply.length; j++) {
+              var rm = reply[j];
+              var after = applyMove(next, rm.r, rm.c, 3 - p, rm.flips);
+              var val = evaluate(after, p);
+              if (val < worst) worst = val;
+            }
+          }
+          if (worst > bestScore) { bestScore = worst; best = m; }
+        }
+        return best;
+      }
+
+      function chooseAI(b) {
+        var moves = legalMoves(b, WHITE);
+        if (!moves.length) return null;
+        var level = elLevel.value;
+        if (level === "easy") return pickEasy(moves);
+        if (level === "hard") return pickHard(b, moves, WHITE);
+        return pickMedium(moves);
+      }
+
+      function todayStamp() {
+        var d = new Date();
+        var m = d.getMonth() + 1;
+        var day = d.getDate();
+        return d.getFullYear() + "-" + (m < 10 ? "0" : "") + m + "-" + (day < 10 ? "0" : "") + day;
+      }
+
+      function levelLabel() {
+        var v = elLevel.value;
+        return v.charAt(0).toUpperCase() + v.slice(1);
+      }
+
+      function resultText() {
+        var sc = counts(board);
+        var outcome = "Draw";
+        if (sc.black > sc.white) outcome = "Black won";
+        else if (sc.white > sc.black) outcome = "White won";
+        var grid = [];
+        for (var r = 0; r < N; r++) {
+          var row = "";
+          for (var c = 0; c < N; c++) {
+            row += board[r][c] === BLACK ? "⚫" : board[r][c] === WHITE ? "⚪" : "🟩";
+          }
+          grid.push(row);
+        }
+        return [
+          "Othello " + todayStamp(),
+          levelLabel() + " · " + outcome,
+          "⚫ " + sc.black + " – " + sc.white + " ⚪",
+          "",
+          grid.join("\n")
+        ].join("\n");
+      }
+
+      function makeDisc(color, pop) {
+        var d = document.createElement("div");
+        d.className = "disc " + color + (pop ? " pop" : "");
+        d.setAttribute("data-color", color);
+        return d;
+      }
+
+      function render(hints) {
+        hints = hints || [];
+        var hintMap = {};
+        for (var i = 0; i < hints.length; i++) hintMap[hints[i].r + "," + hints[i].c] = true;
+
+        for (var r = 0; r < N; r++) {
+          for (var c = 0; c < N; c++) {
+            var cell = cells[r][c];
+            cell.className = hintMap[r + "," + c] ? "cell valid" : "cell";
+            var v = board[r][c];
+            var old = prevBoard ? prevBoard[r][c] : v;
+            var existing = cell.querySelector(".disc");
+
+            if (!v) {
+              if (existing) cell.removeChild(existing);
+              continue;
+            }
+
+            var color = colorName(v);
+            var placedNow = old === 0;
+            var flippedNow = old !== 0 && old !== v;
+
+            if (placedNow) {
+              if (existing) cell.removeChild(existing);
+              cell.appendChild(makeDisc(color, true));
+            } else if (flippedNow) {
+              if (existing) cell.removeChild(existing);
+              cell.appendChild(makeDisc(color, true));
+            } else if (!existing || existing.getAttribute("data-color") !== color) {
+              if (existing) cell.removeChild(existing);
+              cell.appendChild(makeDisc(color, false));
+            }
+          }
+        }
+
+        prevBoard = copyBoard(board);
+        var sc = counts(board);
+        elBS.innerHTML = sc.black;
+        elWS.innerHTML = sc.white;
+        elUndo.disabled = history.length === 0;
+        elShare.disabled = !gameOver;
+      }
+
+      function setStatus() {
+        if (gameOver) {
+          var sc = counts(board);
+          if (sc.black > sc.white) elStatus.innerHTML = "Black wins";
+          else if (sc.white > sc.black) elStatus.innerHTML = "White wins";
+          else elStatus.innerHTML = "Draw";
+        } else {
+          elStatus.innerHTML = current === BLACK ? "Black to move" : "White thinking...";
+        }
+      }
+
+      function bothStuck() {
+        return !legalMoves(board, BLACK).length && !legalMoves(board, WHITE).length;
+      }
+
+      function finishIfNeeded() {
+        if (!bothStuck()) return false;
+        gameOver = true;
+        elMsg.innerHTML = "Game over — tap Share for a Wordle-style result";
+        setStatus();
+        render([]);
+        return true;
+      }
+
+      function afterHuman() {
+        if (finishIfNeeded()) return;
+        current = WHITE;
+        if (!legalMoves(board, WHITE).length) {
+          elMsg.innerHTML = "White has no move and passes";
+          current = BLACK;
+          if (finishIfNeeded()) return;
+          setStatus();
+          render(legalMoves(board, BLACK));
+          return;
+        }
+        elMsg.innerHTML = "";
+        setStatus();
+        render([]);
+        setTimeout(aiMove, 320);
+      }
+
+      function afterAI() {
+        if (finishIfNeeded()) return;
+        current = BLACK;
+        if (!legalMoves(board, BLACK).length) {
+          elMsg.innerHTML = "Black has no move and passes";
+          current = WHITE;
+          setStatus();
+          render([]);
+          if (!gameOver) setTimeout(aiMove, 320);
+          return;
+        }
+        setStatus();
+        render(legalMoves(board, BLACK));
+      }
+
+      function humanMove(r, c) {
+        if (gameOver || current !== BLACK) return;
+        var flips = flipsAt(board, r, c, BLACK);
+        if (!flips.length) return;
+        snapshot();
+        board = applyMove(board, r, c, BLACK, flips);
+        afterHuman();
+      }
+
+      function aiMove() {
+        if (gameOver || current !== WHITE) return;
+        var pick = chooseAI(board);
+        if (!pick) { afterAI(); return; }
+        board = applyMove(board, pick.r, pick.c, WHITE, pick.flips);
+        afterAI();
+      }
+
+      function undo() {
+        if (!history.length) return;
+        var prev = history.pop();
+        board = copyBoard(prev.board);
+        current = prev.current;
+        gameOver = prev.gameOver;
+        elMsg.innerHTML = prev.msg;
+        prevBoard = null;
+        setStatus();
+        render(current === BLACK && !gameOver ? legalMoves(board, BLACK) : []);
+      }
+
+      function shareResult() {
+        if (!gameOver) return;
+        var text = resultText();
+        if (navigator.share) {
+          navigator.share({ title: "Othello", text: text }).catch(function () {
+            copyText(text);
+          });
+        } else {
+          copyText(text);
+        }
+      }
+
+      function copyText(text) {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(function () {
+            elMsg.innerHTML = "Result copied — paste it anywhere";
+          }).catch(function () {
+            fallbackCopy(text);
+          });
+        } else {
+          fallbackCopy(text);
+        }
+      }
+
+      function fallbackCopy(text) {
+        var area = document.createElement("textarea");
+        area.value = text;
+        document.body.appendChild(area);
+        area.select();
+        try { document.execCommand("copy"); elMsg.innerHTML = "Result copied — paste it anywhere"; }
+        catch (e) { alert(text); }
+        document.body.removeChild(area);
+      }
+
+      function buildGrid() {
+        elBoard.innerHTML = "";
+        cells = [];
+        for (var r = 0; r < N; r++) {
+          cells[r] = [];
+          for (var c = 0; c < N; c++) {
+            (function (rr, cc) {
+              var cell = document.createElement("div");
+              cell.className = "cell";
+              cell.onclick = function () { humanMove(rr, cc); };
+              elBoard.appendChild(cell);
+              cells[rr][cc] = cell;
+            })(r, c);
+          }
+        }
+      }
+
+      function start() {
+        board = emptyBoard();
+        prevBoard = null;
+        current = BLACK;
+        gameOver = false;
+        history = [];
+        elMsg.innerHTML = "Click a ringed square to place a disc.";
+        buildGrid();
+        setStatus();
+        render(legalMoves(board, BLACK));
+      }
+
+      document.getElementById("restart").onclick = start;
+      elUndo.onclick = undo;
+      elShare.onclick = shareResult;
+      start();
+    })();
+  </script>
+</body>
+</html>
